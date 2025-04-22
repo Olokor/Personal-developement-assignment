@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from bson import ObjectId
 from flask import Flask, render_template, jsonify, request, session
 from flask_pymongo import PyMongo
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -230,6 +231,77 @@ def get_all_auctions():
             'message': 'Server error',
             'error': str(e)  # Remove in production
         }), 500
+
+@app.route('/auctions/<auction_id>/bids', methods=['POST'])
+@login_required
+def add_bid(auction_id):
+    try:
+        # 1. Validate input data
+        if not request.is_json:
+            return jsonify({'error': 'Request must be JSON'}), 400
+
+        data = request.get_json()
+        if not data or 'amount' not in data:
+            return jsonify({'error': 'Missing bid amount'}), 400
+
+        try:
+            bid_amount = float(data['amount'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Bid amount must be a number'}), 400
+
+        # 2. Validate auction exists
+        if not ObjectId.is_valid(auction_id):
+            return jsonify({'error': 'Invalid auction ID'}), 400
+
+        auction = mongo.db.auctions.find_one({'_id': ObjectId(auction_id)})
+        if not auction:
+            return jsonify({'error': 'Auction not found'}), 404
+
+        # 3. Get current price (base price or highest bid)
+        current_price = auction['base_price']
+        if auction.get('bids'):
+            try:
+                current_price = max(bid['amount'] for bid in auction['bids'])
+            except (KeyError, ValueError):
+                current_price = auction['base_price']
+
+        # 4. Validate bid amount
+        if bid_amount <= float(current_price):
+            return jsonify({
+                'error': f'Bid must be higher than {current_price}'
+            }), 400
+
+        # 5. Create and save bid
+        new_bid = {
+            'amount': bid_amount,
+            'user_id': ObjectId(session['user_id']),
+            'timestamp': datetime.utcnow(),
+            'status': 'active'
+        }
+
+        result = mongo.db.auctions.update_one(
+            {'_id': ObjectId(auction_id)},
+            {'$push': {'bids': new_bid}}
+        )
+
+        if result.modified_count == 1:
+            return jsonify({
+                'success': True,
+                'new_price': bid_amount,
+                'bid': {
+                    'id': str(new_bid.get('_id', '')),
+                    'amount': bid_amount,
+                    'timestamp': new_bid['timestamp'].isoformat()
+                }
+            }), 201
+
+        return jsonify({'error': 'Failed to save bid'}), 500
+
+    except Exception as e:
+        app.logger.error(f"Error in add_bid: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+
 
 @app.errorhandler(404)
 def not_found(error=None)->jsonify:
