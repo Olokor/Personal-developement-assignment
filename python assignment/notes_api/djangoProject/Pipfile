@@ -5,9 +5,9 @@ name = "pypi"
 
 [packages]
 django = "*"
+django-restframework = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.12"
-python_full_version = "3.12.8"
+python_version = "3.13"
